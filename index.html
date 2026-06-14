@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube → Audio Converter</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 520px;
+    }
+
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      color: #fff;
+    }
+
+    .row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    input[type="url"] {
+      flex: 1;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      color: #e8e8e8;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="url"]:focus { border-color: #555; }
+    input[type="url"]::placeholder { color: #555; }
+
+    .format-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    label.fmt {
+      flex: 1;
+      cursor: pointer;
+    }
+    label.fmt input { display: none; }
+    label.fmt span {
+      display: block;
+      text-align: center;
+      padding: 0.45rem;
+      border: 1px solid #333;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      color: #aaa;
+      transition: all 0.15s;
+    }
+    label.fmt input:checked + span {
+      border-color: #e52d27;
+      color: #fff;
+      background: #2a0a09;
+    }
+
+    button {
+      width: 100%;
+      padding: 0.7rem;
+      background: #e52d27;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: #c0211c; }
+    button:disabled { background: #3a1010; color: #666; cursor: not-allowed; }
+
+    #status {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      min-height: 1.2rem;
+      color: #888;
+    }
+    #status.error { color: #e55; }
+    #status.ok { color: #5c5; }
+
+    #dl-wrap {
+      margin-top: 1rem;
+      display: none;
+    }
+    #dl-wrap a {
+      display: block;
+      text-align: center;
+      padding: 0.65rem;
+      background: #1e3a1e;
+      border: 1px solid #2d6b2d;
+      border-radius: 8px;
+      color: #6dca6d;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    #dl-wrap a:hover { background: #254a25; }
+
+    .note {
+      margin-top: 1.25rem;
+      font-size: 0.75rem;
+      color: #444;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>YouTube → Audio</h1>
+
+  <div class="row">
+    <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" spellcheck="false">
+  </div>
+
+  <div class="format-row">
+    <label class="fmt"><input type="radio" name="fmt" value="opus" checked><span>Opus <small>(推奨)</small></span></label>
+    <label class="fmt"><input type="radio" name="fmt" value="mp3"><span>MP3</span></label>
+    <label class="fmt"><input type="radio" name="fmt" value="ogg"><span>OGG</span></label>
+    <label class="fmt"><input type="radio" name="fmt" value="wav"><span>WAV</span></label>
+  </div>
+
+  <button id="btn">変換してダウンロード</button>
+
+  <div id="status"></div>
+  <div id="dl-wrap"><a id="dl-link" target="_blank" rel="noopener">↓ ダウンロード</a></div>
+
+  <p class="note">
+    変換は <a href="https://cobalt.tools" target="_blank" rel="noopener" style="color:#555">cobalt.tools</a> のパブリック API を利用しています。<br>
+    Opus は MP3 より軽量かつ高音質なフォーマットです。
+  </p>
+</div>
+
+<script>
+const API = 'https://api.cobalt.tools/';
+
+const btn = document.getElementById('btn');
+const urlInput = document.getElementById('url');
+const status = document.getElementById('status');
+const dlWrap = document.getElementById('dl-wrap');
+const dlLink = document.getElementById('dl-link');
+
+function setStatus(msg, type = '') {
+  status.textContent = msg;
+  status.className = type;
+}
+
+function getFormat() {
+  return document.querySelector('input[name="fmt"]:checked').value;
+}
+
+btn.addEventListener('click', async () => {
+  const url = urlInput.value.trim();
+  if (!url) { setStatus('URLを入力してください', 'error'); return; }
+
+  dlWrap.style.display = 'none';
+  btn.disabled = true;
+  setStatus('変換中...');
+
+  try {
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, downloadMode: 'audio', audioFormat: getFormat() })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || (data.status !== 'stream' && data.status !== 'redirect' && data.status !== 'tunnel')) {
+      const msg = data?.error?.code || data?.text || `エラー (HTTP ${res.status})`;
+      setStatus(msg, 'error');
+      return;
+    }
+
+    const dlUrl = data.url;
+    dlLink.href = dlUrl;
+    dlLink.textContent = `↓ ダウンロード (.${getFormat()})`;
+    dlWrap.style.display = 'block';
+    setStatus('完了！リンクをクリックしてダウンロード', 'ok');
+
+  } catch (e) {
+    setStatus('通信エラー: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') btn.click(); });
+</script>
+</body>
+</html>
