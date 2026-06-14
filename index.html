@@ -37,7 +37,7 @@
     .row {
       display: flex;
       gap: 0.5rem;
-      margin-bottom: 1rem;
+      margin-bottom: 1.25rem;
     }
 
     input[type="url"] {
@@ -53,33 +53,6 @@
     }
     input[type="url"]:focus { border-color: #555; }
     input[type="url"]::placeholder { color: #555; }
-
-    .format-row {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1.25rem;
-    }
-
-    label.fmt {
-      flex: 1;
-      cursor: pointer;
-    }
-    label.fmt input { display: none; }
-    label.fmt span {
-      display: block;
-      text-align: center;
-      padding: 0.45rem;
-      border: 1px solid #333;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      color: #aaa;
-      transition: all 0.15s;
-    }
-    label.fmt input:checked + span {
-      border-color: #e52d27;
-      color: #fff;
-      background: #2a0a09;
-    }
 
     button {
       width: 100%;
@@ -129,6 +102,7 @@
       color: #444;
       line-height: 1.5;
     }
+    .note a { color: #555; }
   </style>
 </head>
 <body>
@@ -139,30 +113,24 @@
     <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" spellcheck="false">
   </div>
 
-  <div class="format-row">
-    <label class="fmt"><input type="radio" name="fmt" value="opus" checked><span>Opus <small>(推奨)</small></span></label>
-    <label class="fmt"><input type="radio" name="fmt" value="mp3"><span>MP3</span></label>
-    <label class="fmt"><input type="radio" name="fmt" value="ogg"><span>OGG</span></label>
-    <label class="fmt"><input type="radio" name="fmt" value="wav"><span>WAV</span></label>
-  </div>
-
-  <button id="btn">変換してダウンロード</button>
+  <button id="btn">変換してダウンロード (Opus/WebM)</button>
 
   <div id="status"></div>
-  <div id="dl-wrap"><a id="dl-link" target="_blank" rel="noopener">↓ ダウンロード</a></div>
+  <div id="dl-wrap"><a id="dl-link">↓ ダウンロード</a></div>
 
   <p class="note">
-    変換は <a href="https://cobalt.tools" target="_blank" rel="noopener" style="color:#555">cobalt.tools</a> のパブリック API を利用しています。<br>
-    Opus は MP3 より軽量かつ高音質なフォーマットです。
+    <a href="https://github.com/TeamPiped/Piped" target="_blank" rel="noopener">Piped</a> のパブリック API を利用してストリームURLを取得します。<br>
+    フォーマットは Opus/WebM（MP3 より軽量・高音質）です。
   </p>
 </div>
 
 <script>
-// cobalt-compatible public instances (tried in order)
-const INSTANCES = [
-  'https://api.cobalt.tools/',
-  'https://cobalt.api.xuriox.com/',
-  'https://cobalt.sekanho.com/',
+// Piped public API instances (tried in order)
+const PIPED_APIS = [
+  'https://pipedapi.kavin.rocks',
+  'https://piped-api.garudalinux.org',
+  'https://api.piped.projectsegfau.lt',
+  'https://pipedapi.tokhmi.xyz',
 ];
 
 const btn = document.getElementById('btn');
@@ -176,56 +144,90 @@ function setStatus(msg, type = '') {
   status.className = type;
 }
 
-function getFormat() {
-  return document.querySelector('input[name="fmt"]:checked').value;
+function extractVideoId(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1).split('?')[0];
+    if (u.hostname.includes('youtube.com')) {
+      if (u.pathname.startsWith('/shorts/')) return u.pathname.split('/')[2];
+      return u.searchParams.get('v');
+    }
+  } catch {}
+  return null;
 }
 
-async function tryInstance(apiUrl, url, fmt) {
-  const res = await fetch(apiUrl, {
-    method: 'POST',
-    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, downloadMode: 'audio', audioFormat: fmt })
-  });
-  const data = await res.json();
-  if (res.ok && (data.status === 'stream' || data.status === 'redirect' || data.status === 'tunnel')) {
-    return data.url;
-  }
-  const errCode = data?.error?.code || '';
-  if (errCode === 'error.api.auth.jwt.missing' || errCode.includes('auth')) {
-    throw new Error('AUTH'); // signal to try next instance
-  }
-  throw new Error(data?.error?.code || data?.text || `HTTP ${res.status}`);
+async function fetchStreams(apiBase, videoId) {
+  const res = await fetch(`${apiBase}/streams/${videoId}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+function bestAudioStream(audioStreams) {
+  // prefer opus, then pick highest bitrate
+  const opus = audioStreams.filter(s => s.mimeType && s.mimeType.includes('opus'));
+  const pool = opus.length ? opus : audioStreams;
+  return pool.reduce((best, s) => (!best || s.bitrate > best.bitrate) ? s : best, null);
+}
+
+async function downloadBlob(streamUrl, filename) {
+  setStatus('ダウンロード中...');
+  const res = await fetch(streamUrl);
+  if (!res.ok) throw new Error(`ストリーム取得失敗 (HTTP ${res.status})`);
+  const blob = await res.blob();
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objUrl;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(objUrl), 10000);
 }
 
 btn.addEventListener('click', async () => {
   const url = urlInput.value.trim();
   if (!url) { setStatus('URLを入力してください', 'error'); return; }
 
+  const videoId = extractVideoId(url);
+  if (!videoId) { setStatus('有効な YouTube URL を入力してください', 'error'); return; }
+
   dlWrap.style.display = 'none';
   btn.disabled = true;
 
-  let dlUrl = null;
-  for (let i = 0; i < INSTANCES.length; i++) {
-    setStatus(`変換中… (${i + 1}/${INSTANCES.length})`);
+  let data = null;
+  for (let i = 0; i < PIPED_APIS.length; i++) {
+    setStatus(`ストリーム情報を取得中… (${i + 1}/${PIPED_APIS.length})`);
     try {
-      dlUrl = await tryInstance(INSTANCES[i], url, getFormat());
+      data = await fetchStreams(PIPED_APIS[i], videoId);
       break;
     } catch (e) {
-      if (e.message === 'AUTH' && i < INSTANCES.length - 1) continue;
-      if (i === INSTANCES.length - 1) {
-        setStatus('エラー: ' + e.message, 'error');
+      if (i === PIPED_APIS.length - 1) {
+        setStatus('全インスタンスへの接続に失敗しました: ' + e.message, 'error');
         btn.disabled = false;
         return;
       }
     }
   }
 
-  if (dlUrl) {
-    const fmt = getFormat();
-    dlLink.href = dlUrl;
-    dlLink.textContent = `↓ ダウンロード (.${fmt})`;
+  const stream = bestAudioStream(data.audioStreams || []);
+  if (!stream) {
+    setStatus('音声ストリームが見つかりませんでした', 'error');
+    btn.disabled = false;
+    return;
+  }
+
+  const title = (data.title || videoId).replace(/[\\/:*?"<>|]/g, '_');
+  const ext = stream.mimeType?.includes('opus') ? 'webm' : 'webm';
+  const filename = `${title}.${ext}`;
+
+  try {
+    await downloadBlob(stream.url, filename);
+    setStatus('ダウンロード完了！', 'ok');
+  } catch {
+    // CORS blocked on direct fetch — fall back to link
+    dlLink.href = stream.url;
+    dlLink.download = filename;
+    dlLink.textContent = `↓ ダウンロード (${Math.round(stream.bitrate / 1000)} kbps)`;
     dlWrap.style.display = 'block';
-    setStatus('完了！リンクをクリックしてダウンロード', 'ok');
+    setStatus('リンクを右クリック→「名前を付けて保存」でダウンロードできます', 'ok');
   }
 
   btn.disabled = false;
